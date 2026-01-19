@@ -1,0 +1,13 @@
+# Cache directory for intermediate census downloads
+cache/
+
+# Output data files
+*.parquet
+
+# R environment
+.Rhistory
+.RData
+.Rproj.user/
+
+# Log files
+logs/
