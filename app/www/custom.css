@@ -1,0 +1,49 @@
+/* custom.css - Style overrides for Child Poverty Explorer */
+
+/* Fix pickerInput dropdown appearing behind map legend */
+.bootstrap-select .dropdown-menu {
+  z-index: 1060 !important;
+}
+
+/* Ensure dropdown container is also above other elements */
+.bootstrap-select.show {
+  z-index: 1055 !important;
+}
+
+/* Compact controls card - prevent scrollbars */
+.controls-compact {
+  overflow: visible !important;
+}
+
+.controls-compact .card-body {
+  overflow: visible !important;
+}
+
+/* Make pickerInput more compact */
+.controls-compact .bootstrap-select > .dropdown-toggle {
+  padding: 0.25rem 0.5rem;
+  font-size: 0.875rem;
+}
+
+/* Make slider more compact using uniform scale */
+.controls-compact .shiny-input-container:has(.irs) {
+  transform: scale(0.9);
+  transform-origin: left top;
+  width: 111% !important; /* compensate for scale to fill width */
+}
+
+/* Ensure card clips content and has room for slider */
+.controls-compact .card-body {
+  padding-bottom: 0.75rem !important;
+  overflow: hidden !important;
+}
+
+/* Reduce margin between dropdown and slider */
+.controls-compact .mt-2 {
+  margin-top: 0.25rem !important;
+}
+
+/* Smaller label text */
+.controls-compact .text-muted {
+  font-size: 0.75rem;
+}

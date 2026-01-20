@@ -1,0 +1,136 @@
+# _brand.yml - CPAL Brand Configuration
+# This file is the single source of truth for all CPAL brand colors.
+# Palettes in R code are built from these base colors.
+
+meta:
+  name: Child Poverty Action Lab
+  link: https://childpovertyactionlab.org
+
+color:
+  palette:
+    # === Core Brand Colors ===
+    midnight: "#004855"
+    deep_teal: "#006878"
+    coral: "#E86A50"
+    sage: "#5A8A6F"
+    slate: "#5C6B73"
+    warm_gray: "#9BA8AB"
+
+    # === Legacy Colors (for backward compatibility) ===
+    teal: "#007A8C"
+    gold: "#B8860B"
+    plum: "#8B5E83"
+    coral_dark: "#C75540"
+
+    # === Neutral Colors ===
+    white: "#FFFFFF"
+    neutral: "#E8ECEE"
+    black: "#1A1A1A"
+
+    # === Sequential Palette - Midnight (light to dark) ===
+    midnight_1: "#E8F4F6"
+    midnight_2: "#B8D9E0"
+    midnight_3: "#88BECA"
+    midnight_4: "#58A3B4"
+    midnight_5: "#28889E"
+    midnight_6: "#006D88"
+    midnight_7: "#004855"
+    midnight_8: "#002D38"
+
+    # === Sequential Palette - Coral (light to dark) ===
+    coral_1: "#FDEAE6"
+    coral_2: "#FAD0C6"
+    coral_3: "#F7B6A6"
+    coral_4: "#F49C86"
+    coral_5: "#F18266"
+    coral_6: "#E86A50"
+    coral_7: "#C75540"
+    coral_8: "#A64030"
+
+    # === Sequential Palette - Sage (light to dark) ===
+    sage_1: "#E9F0EB"
+    sage_2: "#C8DCD0"
+    sage_3: "#A7C8B5"
+    sage_4: "#86B49A"
+    sage_5: "#65A07F"
+    sage_6: "#5A8A6F"
+    sage_7: "#456B55"
+    sage_8: "#304C3C"
+
+    # === Diverging Palette - Coral to Midnight ===
+    div_coral_1: "#C75540"
+    div_coral_2: "#E86A50"
+    div_coral_3: "#F08B78"
+    div_coral_4: "#F5ADA0"
+    div_neutral: "#E8ECEE"
+    div_teal_1: "#88BECA"
+    div_teal_2: "#58A3B4"
+    div_teal_3: "#006878"
+    div_teal_4: "#004855"
+
+    # === Diverging Palette - Sage to Coral ===
+    div_sage_1: "#456B55"
+    div_sage_2: "#5A8A6F"
+    div_sage_3: "#7AA990"
+    div_sage_4: "#B5D1C2"
+    # div_neutral is shared: "#E8ECEE"
+    div_sc_coral_1: "#F5ADA0"
+    div_sc_coral_2: "#F08B78"
+    div_sc_coral_3: "#E86A50"
+    div_sc_coral_4: "#C75540"
+
+    # === Status Colors ===
+    success: "#5A8A6F"
+    warning: "#D4A84B"
+    error: "#C75540"
+    info: "#006878"
+
+  # Semantic color assignments
+  foreground: black
+  background: white
+  primary: deep_teal
+  secondary: midnight
+  success: sage
+  info: deep_teal
+  warning: warning
+  danger: coral
+
+typography:
+  # 1. Define the fonts and their sources
+  fonts:
+    - family: "Poppins"
+      source: google
+    - family: "Inter"
+      source: google
+    - family: "Fira Code"
+      source: google
+
+  # 2. Apply the fonts to the default HTML elements
+  base:
+    family: Poppins
+  headings:
+    family: Poppins
+  monospace:
+    family: Fira Code
+
+defaults:
+  bootstrap:
+    defaults:
+      "enable-rounded": true
+      "enable-shadows": true
+      "enable-transitions": true
+      "link-decoration": none
+      "border-radius": "6px"
+      "btn-border-radius": "6px"
+      "input-border-radius": "6px"
+      "card-border-radius": "8px"
+      # bslib requires actual hex color values, not color references
+      "input-border-color": "#006878"
+      "progress-bar-bg": "#006878"
+      "progress-bg": "#FFFFFF"
+      "card-cap-padding-y": "0.75rem"
+      "alert-padding-y": "0.75rem"
+      "tooltip-bg": "#333333"
+      "tooltip-color": "#FFFFFF"
+      "bg-light": "#FFFFFF"
+      "bg-dark": "#1A1A1A"

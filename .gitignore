@@ -11,3 +11,9 @@ cache/
 
 # Log files
 logs/
+
+# Environment files with secrets
+.Renviron
+
+# Claude Code settings
+.claude/
