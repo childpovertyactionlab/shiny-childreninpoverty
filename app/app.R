@@ -1,6 +1,9 @@
 # app.R
 # Child Poverty Census Data Dashboard
 # Visualizes child poverty data across US cities with 100k+ population
+#
+# NOTE: Data is loaded from Databricks (sandbox.michael)
+# TODO: Update to production schema before deployment
 
 # =============================================================================
 # SETUP
@@ -11,7 +14,7 @@ library(bslib)
 library(bsicons)
 library(tidyverse)
 library(sf)
-library(arrow)
+library(httr2)
 library(reactable)
 library(mapgl)
 library(cpaltemplates)
@@ -21,29 +24,52 @@ library(shinyWidgets)  # For better dropdown inputs
 
 # Load helper functions
 source("R/utils.R")
+source("R/databricks.R")
 
-# Set Mapbox token for cpal_mapgl() basemaps
-Sys.setenv(MAPBOX_PUBLIC_TOKEN = "pk.eyJ1IjoiY3BhbGFuYWx5dGljcyIsImEiOiJjbHg5ODAwMGUxaTRtMmpwdGNscms3ZnJmIn0.D6yaemYNkijMo1naveeLbw")
+# Set Mapbox token for cpal_mapgl() basemaps (read from .Renviron)
+# For shinyapps.io, set MAPBOX_PUBLIC_TOKEN in the app settings
+if (Sys.getenv("MAPBOX_PUBLIC_TOKEN") == "") {
+  stop("MAPBOX_PUBLIC_TOKEN must be set in .Renviron or shinyapps.io environment variables")
+}
 
 # Setup CPAL fonts
 setup_cpal_google_fonts()
 
 # =============================================================================
-# LOAD DATA
+# LOAD DATA FROM DATABRICKS
 # =============================================================================
 
-# Check for data files
-if (!file.exists("data/tracts.parquet") || !file.exists("data/cities.parquet")) {
-  stop("
-Data files not found in app/data/. Please run the following scripts first:
-  1. source('R/prepare_data_for_databricks.R')  # Creates enriched data
-2. source('scripts/refresh_app_data.R')       # Bundles data for app
-")
+# Databricks configuration
+# NOTE: Currently using sandbox.michael for development
+# TODO: Update to production schema before deployment
+DATABRICKS_CATALOG <- "sandbox"
+DATABRICKS_SCHEMA <- "michael"
+TRACTS_TABLE <- "census_tracts_children_poverty"
+CITIES_TABLE <- "cities_100k_children_poverty"
+
+# Get Databricks credentials
+DATABRICKS_HOST <- Sys.getenv("DATABRICKS_HOST")
+DATABRICKS_TOKEN <- Sys.getenv("DATABRICKS_TOKEN")
+DATABRICKS_WAREHOUSE_ID <- Sys.getenv("DATABRICKS_WAREHOUSE_ID")
+
+if (DATABRICKS_HOST == "" || DATABRICKS_TOKEN == "" || DATABRICKS_WAREHOUSE_ID == "") {
+  stop("DATABRICKS_HOST, DATABRICKS_TOKEN, and DATABRICKS_WAREHOUSE_ID must be set in .Renviron")
 }
 
-# Load bundled parquet files
-tracts <- read_parquet("data/tracts.parquet")
-cities <- read_parquet("data/cities.parquet")
+# Query data from Databricks using REST API (avoids ODBC string truncation)
+tracts <- databricks_query(
+  sql = sprintf("SELECT * FROM %s.%s.%s", DATABRICKS_CATALOG, DATABRICKS_SCHEMA, TRACTS_TABLE),
+  host = DATABRICKS_HOST,
+  token = DATABRICKS_TOKEN,
+  warehouse_id = DATABRICKS_WAREHOUSE_ID
+)
+
+cities <- databricks_query(
+  sql = sprintf("SELECT * FROM %s.%s.%s", DATABRICKS_CATALOG, DATABRICKS_SCHEMA, CITIES_TABLE),
+  host = DATABRICKS_HOST,
+  token = DATABRICKS_TOKEN,
+  warehouse_id = DATABRICKS_WAREHOUSE_ID
+)
 
 # Create city choices for dropdown (sorted alphabetically)
 city_choices <- cities %>%
@@ -65,14 +91,10 @@ ui <- page_navbar(
 
   title = tags$span(
     tags$img(src = "https://raw.githubusercontent.com/childpovertyactionlab/cpaltemplates/main/inst/assets/cpal_logo.png", height = "30px", style = "margin-right: 10px;"),
-    "Child Poverty Explorer"
+    tags$span("Child Poverty Flipbook", class = "navbar-title-text")
   ),
   theme = cpal_dashboard_theme(),
   fillable = TRUE,
-
-  # Dark mode toggle in navbar
-  nav_spacer(),
-  nav_item(input_dark_mode(id = "dark_mode", mode = "light")),
 
   # --------------------------------------------------------------------------
   # Tab 1: Where do children live?
@@ -83,10 +105,11 @@ ui <- page_navbar(
 
     # Controls and stat row
     layout_columns(
-      col_widths = c(6, 6),
+      col_widths = breakpoints(sm = c(12, 12), xl = c(6, 6)),
+      fill = FALSE,
       class = "mb-3",
 
-      # City selector on the left
+      # City selector on the left with data description
       card(
         class = "controls-compact",
         card_body(
@@ -101,20 +124,27 @@ ui <- page_navbar(
               liveSearchPlaceholder = "Search cities...",
               title = "Select a City",
               size = 10,
-              dropupAuto = FALSE
+              dropupAuto = FALSE,
+              container = "body"
             ),
             width = "100%"
+          ),
+          # Data source description
+          tags$p(
+            class = "text-muted small mt-2 mb-0",
+            "This dashboard shows data for all U.S. cities with a population over 100,000 residents. ",
+            "Data is from the 2023 American Community Survey 5-Year Estimates."
           )
         )
       ),
 
       # Value box for headline stat on the right
-      uiOutput("valuebox_tab1")
+      div(class = "valuebox-wrapper", uiOutput("valuebox_tab1"))
     ),
 
     # Map and table layout
     layout_columns(
-      col_widths = c(6, 6),
+      col_widths = breakpoints(sm = c(12, 12), xl = c(6, 6)),
       fill = TRUE,
 
       # Map
@@ -142,7 +172,8 @@ ui <- page_navbar(
 
     # Controls and stat row
     layout_columns(
-      col_widths = c(6, 6),
+      col_widths = breakpoints(sm = c(12, 12), xl = c(6, 6)),
+      fill = FALSE,
       class = "mb-3",
 
       # Stacked controls on the left
@@ -161,7 +192,8 @@ ui <- page_navbar(
               liveSearchPlaceholder = "Search cities...",
               title = "Select a City",
               size = 10,
-              dropupAuto = FALSE
+              dropupAuto = FALSE,
+              container = "body"
             ),
             width = "100%"
           ),
@@ -186,12 +218,12 @@ ui <- page_navbar(
       ),
 
       # Value box for headline stat on the right
-      uiOutput("valuebox_tab2")
+      div(class = "valuebox-wrapper", uiOutput("valuebox_tab2"))
     ),
 
     # Map and table layout
     layout_columns(
-      col_widths = c(6, 6),
+      col_widths = breakpoints(sm = c(12, 12), xl = c(6, 6)),
       fill = TRUE,
 
       # Map
@@ -219,7 +251,8 @@ ui <- page_navbar(
 
     # Controls and stat row
     layout_columns(
-      col_widths = c(6, 6),
+      col_widths = breakpoints(sm = c(12, 12), xl = c(6, 6)),
+      fill = FALSE,
       class = "mb-3",
 
       # Stacked controls on the left
@@ -238,7 +271,8 @@ ui <- page_navbar(
               liveSearchPlaceholder = "Search cities...",
               title = "Select a City",
               size = 10,
-              dropupAuto = FALSE
+              dropupAuto = FALSE,
+              container = "body"
             ),
             width = "100%"
           ),
@@ -263,12 +297,12 @@ ui <- page_navbar(
       ),
 
       # Value box for headline stat on the right
-      uiOutput("valuebox_tab3")
+      div(class = "valuebox-wrapper", uiOutput("valuebox_tab3"))
     ),
 
     # Map and table layout
     layout_columns(
-      col_widths = c(6, 6),
+      col_widths = breakpoints(sm = c(12, 12), xl = c(6, 6)),
       fill = TRUE,
 
       # Map
@@ -285,7 +319,11 @@ ui <- page_navbar(
         reactableOutput("table_tab3")
       )
     )
-  )
+  ),
+
+  # Dark mode toggle on right side of navbar (after tabs)
+  nav_spacer(),
+  nav_item(input_dark_mode(id = "dark_mode", mode = "light"))
 )
 
 # =============================================================================
@@ -356,7 +394,8 @@ server <- function(input, output, session) {
       value = format(city$total_children, big.mark = ","),
       showcase = bsicons::bs_icon("people-fill"),
       theme = "secondary",
-      p(paste0("children with ", city$city_poverty_rate_display, "% poverty rate"))
+      p(paste0("children with ", city$city_poverty_rate_display, "% poverty rate")),
+      p(class = "small", "Source: 2023 ACS 5-Year")
     )
   })
 
@@ -461,8 +500,7 @@ server <- function(input, output, session) {
       ),
       highlight = TRUE,
       compact = TRUE,
-      defaultPageSize = 15,
-      style = list(maxHeight = "450px"),
+      defaultPageSize = 20,
       selection = "single",
       onClick = JS("function(rowInfo, column) {
         Shiny.setInputValue('selected_tract_tab1', rowInfo.row.GEOID, {priority: 'event'});
@@ -537,7 +575,8 @@ server <- function(input, output, session) {
       value = paste0(pct_poverty, "%"),
       showcase = bsicons::bs_icon("graph-up"),
       theme = "danger",
-      p(paste0("of all child poverty in ", city_name))
+      p(paste0("of all child poverty in ", city_name)),
+      p(class = "small", "Source: 2023 ACS 5-Year")
     )
   })
 
@@ -651,8 +690,7 @@ server <- function(input, output, session) {
       ),
       highlight = TRUE,
       compact = TRUE,
-      defaultPageSize = 15,
-      style = list(maxHeight = "450px"),
+      defaultPageSize = 20,
       selection = "single",
       onClick = JS("function(rowInfo, column) {
         Shiny.setInputValue('selected_tract_tab2', rowInfo.row.GEOID, {priority: 'event'});
@@ -726,7 +764,8 @@ server <- function(input, output, session) {
       value = paste0(pct_poverty, "%"),
       showcase = bsicons::bs_icon("graph-up"),
       theme = "success",
-      p(paste0("of all child poverty in ", city_name))
+      p(paste0("of all child poverty in ", city_name)),
+      p(class = "small", "Source: 2023 ACS 5-Year")
     )
   })
 
@@ -837,8 +876,7 @@ server <- function(input, output, session) {
       ),
       highlight = TRUE,
       compact = TRUE,
-      defaultPageSize = 15,
-      style = list(maxHeight = "450px"),
+      defaultPageSize = 20,
       selection = "single",
       onClick = JS("function(rowInfo, column) {
         Shiny.setInputValue('selected_tract_tab3', rowInfo.row.GEOID, {priority: 'event'});

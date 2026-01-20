@@ -1,72 +1,60 @@
 # upload_to_databricks.R
-# Template script to upload enriched census data to Databricks
+# Script to upload enriched census data to Databricks
 #
-# IMPORTANT: Review and configure the settings below before running!
-# This script will NOT run automatically - you must execute it manually.
+# NOTE: Data is currently stored in sandbox.michael for development.
+# TODO: Move to a production schema (e.g., prod.census or prod.child_poverty)
+#       before deploying to production.
+#
+# This script uploads parquet files to a Databricks Unity Catalog volume,
+# then creates tables from those files using the REST API.
 
-library(DBI)
-library(odbc)
+library(httr2)
 library(arrow)
+library(glue)
 
 source("R/logging.R")
 init_logging("upload_databricks")
 
 # =============================================================================
-# CONFIGURATION - EDIT THESE VALUES BEFORE RUNNING
+# CONFIGURATION
 # =============================================================================
 
-# Databricks catalog and schema - CHANGE THESE to your preferred location
-DATABRICKS_CATALOG <- "sandbox"      # e.g., "sandbox", "prod", "dev"
-DATABRICKS_SCHEMA  <- "michael"       # e.g., "michael", "child_poverty", "census"
+# Databricks catalog and schema
+# NOTE: Currently using sandbox.michael for development
+# TODO: Update to production schema before deployment
+DATABRICKS_CATALOG <- "sandbox"
+DATABRICKS_SCHEMA  <- "michael"
 
 # Table names for the data
 TRACTS_TABLE <- "census_tracts_children_poverty"
 CITIES_TABLE <- "cities_100k_children_poverty"
 
-# Set to TRUE when you're ready to run
-READY_TO_UPLOAD <- FALSE
+# Volume for staging files (will be created if it doesn't exist)
+VOLUME_NAME <- "child_poverty_staging"
 
 # =============================================================================
-# SAFETY CHECK
-# =============================================================================
-
-if (!READY_TO_UPLOAD) {
-  message("
-============================================================
-  UPLOAD SCRIPT NOT CONFIGURED
-============================================================
-
-Before running this script, please:
-
-1. Edit the CONFIGURATION section above:
-   - DATABRICKS_CATALOG: Your target catalog
-   - DATABRICKS_SCHEMA: Your target schema
-   - Table names if you want different names
-
-2. Ensure your .Renviron has valid Databricks credentials:
-   - DATABRICKS_HOST
-   - DATABRICKS_TOKEN
-   - DATABRICKS_HTTP_PATH (or DATABRICKS_WAREHOUSE_ID)
-
-3. Set READY_TO_UPLOAD <- TRUE
-
-4. Run this script again
-
-Target location: {DATABRICKS_CATALOG}.{DATABRICKS_SCHEMA}
-Tables to create:
-  - {TRACTS_TABLE}
-  - {CITIES_TABLE}
-============================================================
-")
-  stop("Please configure the script before running.")
-}
-
-# =============================================================================
-# LOAD ENRICHED DATA
+# LOAD ENVIRONMENT AND DATA
 # =============================================================================
 
 log_info("=== Uploading Data to Databricks ===")
 log_info("Target: {DATABRICKS_CATALOG}.{DATABRICKS_SCHEMA}")
+
+# Load .Renviron
+readRenviron(".Renviron")
+
+# Get Databricks credentials
+DATABRICKS_HOST <- Sys.getenv("DATABRICKS_HOST")
+DATABRICKS_TOKEN <- Sys.getenv("DATABRICKS_TOKEN")
+DATABRICKS_WAREHOUSE_ID <- Sys.getenv("DATABRICKS_WAREHOUSE_ID")
+
+if (DATABRICKS_HOST == "" || DATABRICKS_TOKEN == "") {
+  stop("DATABRICKS_HOST and DATABRICKS_TOKEN must be set in .Renviron")
+}
+
+# Ensure host has https:// prefix
+if (!grepl("^https?://", DATABRICKS_HOST)) {
+  DATABRICKS_HOST <- paste0("https://", DATABRICKS_HOST)
+}
 
 # Load the enriched parquet files
 log_info("Loading enriched parquet files...")
@@ -76,57 +64,154 @@ cities <- read_parquet("cities_100k_children_poverty_enriched.parquet")
 log_info("Loaded {nrow(tracts)} tracts and {nrow(cities)} cities")
 
 # =============================================================================
-# CONNECT TO DATABRICKS
+# HELPER FUNCTIONS
 # =============================================================================
 
-log_info("Connecting to Databricks...")
+# Execute SQL via Databricks SQL Statement API
+execute_sql <- function(sql, wait = TRUE) {
+  log_info("Executing SQL: {substr(sql, 1, 100)}...")
 
-# Load .Renviron if running interactively
-readRenviron(".Renviron")
+  resp <- request(glue("{DATABRICKS_HOST}/api/2.0/sql/statements/")) |>
+    req_headers(
+      Authorization = paste("Bearer", DATABRICKS_TOKEN),
+      `Content-Type` = "application/json"
+    ) |>
+    req_body_json(list(
+      warehouse_id = DATABRICKS_WAREHOUSE_ID,
+      statement = sql,
+      wait_timeout = if (wait) "50s" else "0s"
+    )) |>
+    req_error(is_error = function(resp) FALSE) |>
+    req_perform()
 
-# Connect using odbc::databricks() - requires DATABRICKS_HOST and DATABRICKS_TOKEN
-con <- tryCatch({
-  DBI::dbConnect(
-    odbc::databricks(),
-    httpPath = Sys.getenv("DATABRICKS_HTTP_PATH"),
-    catalog = DATABRICKS_CATALOG,
-    schema = DATABRICKS_SCHEMA
-  )
+  result <- resp_body_json(resp)
+
+  # Check for errors
+  if (!is.null(result$status$state) && result$status$state == "FAILED") {
+    error_msg <- result$status$error$message %||% "Unknown error"
+    log_error("SQL failed: {error_msg}")
+    stop(glue("SQL execution failed: {error_msg}"))
+  }
+
+  # Poll for completion if still running
+  if (!is.null(result$status$state) && result$status$state %in% c("PENDING", "RUNNING")) {
+    statement_id <- result$statement_id
+    log_info("Statement {statement_id} is running, waiting for completion...")
+
+    for (i in 1:60) {  # Wait up to 5 minutes
+      Sys.sleep(5)
+
+      status_resp <- request(glue("{DATABRICKS_HOST}/api/2.0/sql/statements/{statement_id}")) |>
+        req_headers(Authorization = paste("Bearer", DATABRICKS_TOKEN)) |>
+        req_error(is_error = function(resp) FALSE) |>
+        req_perform()
+
+      result <- resp_body_json(status_resp)
+
+      if (result$status$state == "SUCCEEDED") {
+        log_info("Statement completed successfully")
+        break
+      } else if (result$status$state == "FAILED") {
+        error_msg <- result$status$error$message %||% "Unknown error"
+        log_error("SQL failed: {error_msg}")
+        stop(glue("SQL execution failed: {error_msg}"))
+      }
+    }
+  }
+
+  return(result)
+}
+
+# Upload file to volume using Files API
+upload_to_volume <- function(local_path, volume_file_name) {
+  file_size <- file.info(local_path)$size
+  log_info("Uploading {volume_file_name} ({round(file_size/1024/1024, 1)} MB)...")
+
+  # Read file content
+  file_content <- readBin(local_path, "raw", file_size)
+
+  # Use the Files API for Unity Catalog volumes
+  api_path <- glue("/api/2.0/fs/files/Volumes/{DATABRICKS_CATALOG}/{DATABRICKS_SCHEMA}/{VOLUME_NAME}/{volume_file_name}")
+
+  resp <- request(glue("{DATABRICKS_HOST}{api_path}")) |>
+    req_headers(
+      Authorization = paste("Bearer", DATABRICKS_TOKEN),
+      `Content-Type` = "application/octet-stream"
+    ) |>
+    req_body_raw(file_content) |>
+    req_method("PUT") |>
+    req_error(is_error = function(resp) FALSE) |>
+    req_perform()
+
+  if (resp_status(resp) >= 400) {
+    error_body <- tryCatch(resp_body_json(resp), error = function(e) list(message = "Unknown error"))
+    stop(glue("Upload failed: {error_body$message %||% resp_status(resp)}"))
+  }
+
+  log_info("Upload complete: {volume_file_name}")
+  return(resp)
+}
+
+# =============================================================================
+# CREATE VOLUME (if needed)
+# =============================================================================
+
+log_info("Creating volume if not exists: {DATABRICKS_CATALOG}.{DATABRICKS_SCHEMA}.{VOLUME_NAME}")
+
+tryCatch({
+  execute_sql(glue("CREATE VOLUME IF NOT EXISTS {DATABRICKS_CATALOG}.{DATABRICKS_SCHEMA}.{VOLUME_NAME}"))
+  log_info("Volume ready")
 }, error = function(e) {
-  log_error("Failed to connect to Databricks: {e$message}")
-  log_info("Make sure your .Renviron has: DATABRICKS_HOST, DATABRICKS_TOKEN, DATABRICKS_HTTP_PATH")
-  stop(e)
+  log_warn("Could not create volume: {e$message}")
+  log_info("Continuing - volume may already exist")
 })
 
-log_info("Connected successfully!")
-
 # =============================================================================
-# UPLOAD DATA
+# UPLOAD PARQUET FILES TO VOLUME
 # =============================================================================
 
-# Full table names
-tracts_full_name <- paste(DATABRICKS_CATALOG, DATABRICKS_SCHEMA, TRACTS_TABLE, sep = ".")
-cities_full_name <- paste(DATABRICKS_CATALOG, DATABRICKS_SCHEMA, CITIES_TABLE, sep = ".")
+# Create temp directory for staging
+temp_dir <- tempdir()
 
-# Upload tracts
-log_info("Uploading tracts to {tracts_full_name}...")
-DBI::dbWriteTable(
-  con,
-  name = DBI::Id(catalog = DATABRICKS_CATALOG, schema = DATABRICKS_SCHEMA, table = TRACTS_TABLE),
-  value = tracts,
-  overwrite = TRUE
-)
-log_info("Tracts uploaded successfully!")
+# Write and upload tracts
+log_info("Writing tracts to temporary parquet file...")
+tracts_temp <- file.path(temp_dir, "tracts.parquet")
+write_parquet(tracts, tracts_temp)
+upload_to_volume(tracts_temp, "tracts.parquet")
 
-# Upload cities
-log_info("Uploading cities to {cities_full_name}...")
-DBI::dbWriteTable(
-  con,
-  name = DBI::Id(catalog = DATABRICKS_CATALOG, schema = DATABRICKS_SCHEMA, table = CITIES_TABLE),
-  value = cities,
-  overwrite = TRUE
-)
-log_info("Cities uploaded successfully!")
+# Write and upload cities
+log_info("Writing cities to temporary parquet file...")
+cities_temp <- file.path(temp_dir, "cities.parquet")
+write_parquet(cities, cities_temp)
+upload_to_volume(cities_temp, "cities.parquet")
+
+# =============================================================================
+# CREATE TABLES FROM PARQUET FILES
+# =============================================================================
+
+volume_path <- glue("/Volumes/{DATABRICKS_CATALOG}/{DATABRICKS_SCHEMA}/{VOLUME_NAME}")
+
+# Create tracts table
+log_info("Creating tracts table from parquet...")
+tracts_full_name <- glue("{DATABRICKS_CATALOG}.{DATABRICKS_SCHEMA}.{TRACTS_TABLE}")
+
+execute_sql(glue("DROP TABLE IF EXISTS {tracts_full_name}"))
+execute_sql(glue("
+  CREATE TABLE {tracts_full_name}
+  AS SELECT * FROM parquet.`{volume_path}/tracts.parquet`
+"))
+log_info("Tracts table created: {tracts_full_name}")
+
+# Create cities table
+log_info("Creating cities table from parquet...")
+cities_full_name <- glue("{DATABRICKS_CATALOG}.{DATABRICKS_SCHEMA}.{CITIES_TABLE}")
+
+execute_sql(glue("DROP TABLE IF EXISTS {cities_full_name}"))
+execute_sql(glue("
+  CREATE TABLE {cities_full_name}
+  AS SELECT * FROM parquet.`{volume_path}/cities.parquet`
+"))
+log_info("Cities table created: {cities_full_name}")
 
 # =============================================================================
 # VERIFY UPLOAD
@@ -134,24 +219,22 @@ log_info("Cities uploaded successfully!")
 
 log_info("Verifying upload...")
 
-tracts_count <- DBI::dbGetQuery(con, sprintf(
-  "SELECT COUNT(*) as n FROM %s.%s.%s",
-  DATABRICKS_CATALOG, DATABRICKS_SCHEMA, TRACTS_TABLE
-))
-cities_count <- DBI::dbGetQuery(con, sprintf(
-  "SELECT COUNT(*) as n FROM %s.%s.%s",
-  DATABRICKS_CATALOG, DATABRICKS_SCHEMA, CITIES_TABLE
-))
+tracts_result <- execute_sql(glue("SELECT COUNT(*) as n FROM {tracts_full_name}"))
+cities_result <- execute_sql(glue("SELECT COUNT(*) as n FROM {cities_full_name}"))
 
-log_info("Verification - Tracts in Databricks: {tracts_count$n}")
-log_info("Verification - Cities in Databricks: {cities_count$n}")
+# Extract counts from result
+tracts_count <- tracts_result$result$data_array[[1]][[1]]
+cities_count <- cities_result$result$data_array[[1]][[1]]
+
+log_info("Verification - Tracts in Databricks: {tracts_count}")
+log_info("Verification - Cities in Databricks: {cities_count}")
 
 # =============================================================================
 # CLEANUP
 # =============================================================================
 
-DBI::dbDisconnect(con)
 log_info("=== Upload Complete ===")
 log_info("Tables created:")
 log_info("  - {tracts_full_name}")
 log_info("  - {cities_full_name}")
+log_info("Staging files in volume: {volume_path}")

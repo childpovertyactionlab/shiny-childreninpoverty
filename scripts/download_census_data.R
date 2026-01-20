@@ -189,7 +189,9 @@ tracts <- tracts_raw %>%
     children_poverty = children_povertyE,
     children_poverty_moe = children_povertyM,
     geometry
-  )
+  ) %>%
+  # Clean up NAME column - remove "Census Tract " prefix
+  mutate(NAME = str_remove(NAME, "^Census Tract "))
 
 log_info("[2/3] Filtering cities to 100k+ population...")
 # Process place data: filter to 100k+ population cities
@@ -256,10 +258,15 @@ tract_areas <- tracts_near_cities %>%
 
 log_info("Assigning primary city to each tract...")
 # Find primary city for each tract (largest intersection area)
+# Only assign if tract has >= 1% coverage in the city
+min_coverage_pct <- 1  # Minimum coverage threshold
+
 tract_city_assignments <- intersections %>%
   st_drop_geometry() %>%
   left_join(tract_areas, by = "tract_geoid") %>%
   mutate(coverage_pct = as.numeric(intersection_area / tract_area) * 100) %>%
+  filter(coverage_pct >= min_coverage_pct) %>%  # Exclude tracts with <1% coverage
+
   group_by(tract_geoid) %>%
   slice_max(intersection_area, n = 1, with_ties = FALSE) %>%
   ungroup() %>%
@@ -270,11 +277,12 @@ tract_city_assignments <- intersections %>%
     city_coverage_pct = coverage_pct
   )
 
+log_info("Tracts meeting {min_coverage_pct}% minimum coverage: {nrow(tract_city_assignments)}")
+
 log_info("Joining city assignments to tracts...")
-# Join city assignments back to pre-filtered tracts
-# (all tracts_near_cities already intersect a city, so no filter needed)
+# Join city assignments back to tracts (inner join excludes tracts below coverage threshold)
 tracts_final <- tracts_near_cities %>%
-  left_join(tract_city_assignments, by = c("GEOID" = "tract_geoid"))
+  inner_join(tract_city_assignments, by = c("GEOID" = "tract_geoid"))
 
 log_info("Tracts intersecting 100k+ cities: {nrow(tracts_final)}")
 

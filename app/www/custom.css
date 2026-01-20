@@ -1,49 +1,194 @@
 /* custom.css - Style overrides for Child Poverty Explorer */
 
-/* Fix pickerInput dropdown appearing behind map legend */
+/* =============================================================================
+   NAVBAR
+   ============================================================================= */
+
+/* Responsive title text - scales with screen width */
+.navbar-title-text {
+  font-size: clamp(0.85rem, 2.5vw, 1.1rem);
+  white-space: nowrap;
+}
+
+/* At very small screens (<420px), hide the title text but keep logo */
+@media (max-width: 420px) {
+  .navbar-title-text {
+    display: none;
+  }
+}
+
+/* =============================================================================
+   VALUE BOXES
+   ============================================================================= */
+
+/* Disable bslib's container queries that trigger "compact mode" at 300px */
+.bslib-value-box {
+  container-type: normal !important;
+}
+
+/* Responsive font sizes - scales smoothly across all screen widths */
+.bslib-value-box .value-box-title {
+  font-size: clamp(0.75rem, 2vw, 1rem) !important;
+  line-height: 1.2;
+}
+
+.bslib-value-box .value-box-value {
+  font-size: clamp(1.25rem, 4vw, 2.25rem) !important;
+  line-height: 1.1;
+}
+
+.bslib-value-box .value-box-showcase {
+  font-size: clamp(1.25rem, 4vw, 2.5rem) !important;
+  opacity: 0.9;
+}
+
+.bslib-value-box p {
+  font-size: clamp(0.65rem, 1.5vw, 0.85rem) !important;
+  line-height: 1.2;
+  margin-bottom: 0 !important;
+}
+
+/* At very small screens, hide the icon to give more room for text */
+@media (max-width: 480px) {
+  .bslib-value-box .value-box-showcase {
+    display: none !important;
+  }
+}
+
+/* =============================================================================
+   CARDS
+   ============================================================================= */
+
+.card {
+  border-radius: 10px !important;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08) !important;
+  border: 1px solid rgba(0, 0, 0, 0.06) !important;
+  transition: box-shadow 0.2s ease !important;
+}
+
+.card:hover {
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.12) !important;
+}
+
+.card-header {
+  background: linear-gradient(135deg, #f8f9fa 0%, #ffffff 100%) !important;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06) !important;
+  font-weight: 600 !important;
+  font-size: 0.95rem !important;
+  padding: 0.75rem 1rem !important;
+  border-radius: 10px 10px 0 0 !important;
+}
+
+/* Dark mode */
+[data-bs-theme="dark"] .card {
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.3) !important;
+}
+
+[data-bs-theme="dark"] .card:hover {
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4) !important;
+}
+
+[data-bs-theme="dark"] .card-header {
+  background: linear-gradient(135deg, #2a2a2a 0%, #1e1e1e 100%) !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1) !important;
+}
+
+/* =============================================================================
+   DROPDOWNS (pickerInput with container="body")
+   ============================================================================= */
+
 .bootstrap-select .dropdown-menu {
   z-index: 1060 !important;
+  max-height: 50vh !important;
 }
 
-/* Ensure dropdown container is also above other elements */
-.bootstrap-select.show {
-  z-index: 1055 !important;
-}
+/* =============================================================================
+   CONTROLS CARD
+   ============================================================================= */
 
-/* Compact controls card - prevent scrollbars */
-.controls-compact {
-  overflow: visible !important;
-}
-
+/* Compact styling for the controls card */
 .controls-compact .card-body {
-  overflow: visible !important;
+  padding: 0.5rem !important;
 }
 
-/* Make pickerInput more compact */
 .controls-compact .bootstrap-select > .dropdown-toggle {
   padding: 0.25rem 0.5rem;
   font-size: 0.875rem;
 }
 
-/* Make slider more compact using uniform scale */
-.controls-compact .shiny-input-container:has(.irs) {
-  transform: scale(0.9);
-  transform-origin: left top;
-  width: 111% !important; /* compensate for scale to fill width */
+/* Slider styling */
+.controls-compact .irs {
+  font-size: 10px;
 }
 
-/* Ensure card clips content and has room for slider */
-.controls-compact .card-body {
-  padding-bottom: 0.75rem !important;
-  overflow: hidden !important;
+.controls-compact .irs-min,
+.controls-compact .irs-max {
+  font-size: 9px;
 }
 
-/* Reduce margin between dropdown and slider */
+/* Add horizontal padding so slider min/max labels don't get clipped */
+.controls-compact .flex-grow-1 {
+  padding: 0 0.5rem;
+}
+
 .controls-compact .mt-2 {
   margin-top: 0.25rem !important;
 }
 
-/* Smaller label text */
 .controls-compact .text-muted {
-  font-size: 0.75rem;
+  font-size: 0.7rem;
+}
+
+/* Add spacing when controls stack on smaller screens */
+@media (max-width: 1199px) {
+  .controls-compact {
+    margin-bottom: 0.5rem;
+  }
+}
+
+
+/* On phone screens, stack slider label above slider and give more padding */
+@media (max-width: 576px) {
+  .controls-compact .d-flex.align-items-center.gap-2 {
+    flex-direction: column;
+    align-items: stretch !important;
+    gap: 0.25rem !important;
+  }
+
+  .controls-compact .flex-grow-1 {
+    padding: 0 1rem;
+  }
+}
+
+/* Extra padding for very narrow phones (iPhone SE, Galaxy S8+, etc.) */
+@media (max-width: 400px) {
+  /* Hide "Top N tracts:" label - slider is still usable without it */
+  .controls-compact .text-muted.text-nowrap {
+    display: none;
+  }
+
+  /* Give slider more breathing room */
+  .controls-compact .flex-grow-1 {
+    padding: 0 0.75rem;
+  }
+
+  /* Hide most grid labels, keep only 0, 50, 100 */
+  .controls-compact .irs-grid-text {
+    display: none;
+  }
+
+  .controls-compact .irs-grid-text-0,
+  .controls-compact .irs-grid-text-5,
+  .controls-compact .irs-grid-text-10 {
+    display: block;
+  }
+}
+
+/* Extra narrow phones (Galaxy S8+ at 360px, etc.) */
+@media (max-width: 370px) {
+  /* Show only 0 and 100, hide 50 */
+  .controls-compact .irs-grid-text-5 {
+    display: none;
+  }
 }
