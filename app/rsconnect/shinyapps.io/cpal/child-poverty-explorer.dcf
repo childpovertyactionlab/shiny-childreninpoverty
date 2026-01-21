@@ -1,0 +1,10 @@
+name: child-poverty-explorer
+title: Child Poverty Explorer
+username: cpal
+account: cpal
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 16469650
+bundleId: 11472012
+url: https://cpal.shinyapps.io/child-poverty-explorer/
+version: 1

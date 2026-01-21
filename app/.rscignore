@@ -1,0 +1,5 @@
+# Files to exclude from shinyapps.io deployment
+# Works like .gitignore for rsconnect
+
+# Data folder (app loads from Databricks, not local files)
+data/

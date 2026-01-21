@@ -18,9 +18,12 @@ library(httr2)
 library(reactable)
 library(mapgl)
 library(cpaltemplates)
+library(sysfonts)    # Required for cpaltemplates Google Fonts
+library(showtext)    # Required for cpaltemplates Google Fonts
 library(htmltools)
 library(classInt)
 library(shinyWidgets)  # For better dropdown inputs
+library(shinyjs)       # For updating loading message text
 
 # Load helper functions
 source("R/utils.R")
@@ -56,37 +59,38 @@ if (DATABRICKS_HOST == "" || DATABRICKS_TOKEN == "" || DATABRICKS_WAREHOUSE_ID =
   stop("DATABRICKS_HOST, DATABRICKS_TOKEN, and DATABRICKS_WAREHOUSE_ID must be set in .Renviron")
 }
 
-# Query data from Databricks using REST API (avoids ODBC string truncation)
-tracts <- databricks_query(
-  sql = sprintf("SELECT * FROM %s.%s.%s", DATABRICKS_CATALOG, DATABRICKS_SCHEMA, TRACTS_TABLE),
-  host = DATABRICKS_HOST,
-  token = DATABRICKS_TOKEN,
-  warehouse_id = DATABRICKS_WAREHOUSE_ID
-)
-
-cities <- databricks_query(
-  sql = sprintf("SELECT * FROM %s.%s.%s", DATABRICKS_CATALOG, DATABRICKS_SCHEMA, CITIES_TABLE),
-  host = DATABRICKS_HOST,
-  token = DATABRICKS_TOKEN,
-  warehouse_id = DATABRICKS_WAREHOUSE_ID
-)
-
-# Create city choices for dropdown (sorted alphabetically)
-city_choices <- cities %>%
-  arrange(city_label) %>%
-  { setNames(.$GEOID, .$city_label) }
-
 # Default city: Dallas, Texas
 default_city <- "4819000"
+
+# NOTE: Data is now loaded inside the server function to prevent startup timeout.
+# The UI renders immediately with a loading spinner while data loads in the background.
 
 # =============================================================================
 # UI
 # =============================================================================
 
 ui <- page_navbar(
-  # Include custom CSS
-  header = tags$head(
-    tags$link(rel = "stylesheet", type = "text/css", href = "custom.css")
+  # Include custom CSS and loading overlay
+  header = tagList(
+    useShinyjs(),
+    tags$head(
+      tags$link(rel = "stylesheet", type = "text/css", href = "custom.css"),
+      tags$style(HTML("
+        .loading-overlay {
+          position: fixed;
+          top: 0;
+          left: 0;
+          width: 100%;
+          height: 100%;
+          background: rgba(255, 255, 255, 0.95);
+          z-index: 9999;
+          display: flex;
+          flex-direction: column;
+          justify-content: center;
+          align-items: center;
+        }
+      "))
+    )
   ),
 
   title = tags$span(
@@ -95,6 +99,24 @@ ui <- page_navbar(
   ),
   theme = cpal_dashboard_theme(),
   fillable = TRUE,
+
+  # Loading overlay (hidden after data loads via conditionalPanel)
+  conditionalPanel(
+    condition = "!output.data_ready",
+    div(
+      class = "loading-overlay",
+      div(
+        class = "spinner-border text-primary",
+        role = "status",
+        style = "width: 3rem; height: 3rem;"
+      ),
+      p(id = "loading-message-text",
+        "Connecting to data warehouse...",
+        class = "mt-3",
+        style = "font-size: 1.1rem; color: #004855;")
+      # Note: #004855 is CPAL midnight color
+    )
+  ),
 
   # --------------------------------------------------------------------------
   # Tab 1: Where do children live?
@@ -114,21 +136,7 @@ ui <- page_navbar(
         class = "controls-compact",
         card_body(
           class = "p-2",
-          pickerInput(
-            "city_tab1",
-            label = NULL,
-            choices = city_choices,
-            selected = default_city,
-            options = pickerOptions(
-              liveSearch = TRUE,
-              liveSearchPlaceholder = "Search cities...",
-              title = "Select a City",
-              size = 10,
-              dropupAuto = FALSE,
-              container = "body"
-            ),
-            width = "100%"
-          ),
+          uiOutput("city_picker_tab1"),
           # Data source description
           tags$p(
             class = "text-muted small mt-2 mb-0",
@@ -182,21 +190,7 @@ ui <- page_navbar(
         card_body(
           class = "p-2",
           # City selector (no label, uses placeholder)
-          pickerInput(
-            "city_tab2",
-            label = NULL,
-            choices = city_choices,
-            selected = default_city,
-            options = pickerOptions(
-              liveSearch = TRUE,
-              liveSearchPlaceholder = "Search cities...",
-              title = "Select a City",
-              size = 10,
-              dropupAuto = FALSE,
-              container = "body"
-            ),
-            width = "100%"
-          ),
+          uiOutput("city_picker_tab2"),
           # Slider with inline label
           div(
             class = "d-flex align-items-center gap-2 mt-2",
@@ -261,21 +255,7 @@ ui <- page_navbar(
         card_body(
           class = "p-2",
           # City selector (no label, uses placeholder)
-          pickerInput(
-            "city_tab3",
-            label = NULL,
-            choices = city_choices,
-            selected = default_city,
-            options = pickerOptions(
-              liveSearch = TRUE,
-              liveSearchPlaceholder = "Search cities...",
-              title = "Select a City",
-              size = 10,
-              dropupAuto = FALSE,
-              container = "body"
-            ),
-            width = "100%"
-          ),
+          uiOutput("city_picker_tab3"),
           # Slider with inline label
           div(
             class = "d-flex align-items-center gap-2 mt-2",
@@ -333,6 +313,158 @@ ui <- page_navbar(
 server <- function(input, output, session) {
 
   # --------------------------------------------------------------------------
+  # Load data from Databricks (deferred to prevent startup timeout)
+  # --------------------------------------------------------------------------
+
+  # Reactive values to hold loaded data
+  data_loaded <- reactiveVal(FALSE)
+  tracts_data <- reactiveVal(NULL)
+  cities_data <- reactiveVal(NULL)
+  city_choices <- reactiveVal(NULL)
+
+  # Helper function to update loading message via shinyjs
+  update_loading_message <- function(msg) {
+    shinyjs::html("loading-message-text", msg)
+  }
+
+  # Load data once on session start
+  observe({
+    # Only run once
+    if (data_loaded()) return()
+
+    message(">>> Starting data load...")
+
+    tryCatch({
+      # Stage 1: Query tracts
+      update_loading_message("Loading census tract data...")
+      message(">>> Querying tracts table...")
+      tracts <- databricks_query(
+        sql = sprintf("SELECT * FROM %s.%s.%s", DATABRICKS_CATALOG, DATABRICKS_SCHEMA, TRACTS_TABLE),
+        host = DATABRICKS_HOST,
+        token = DATABRICKS_TOKEN,
+        warehouse_id = DATABRICKS_WAREHOUSE_ID
+      )
+      tracts_data(tracts)
+      message(paste(">>> Tracts loaded:", nrow(tracts), "rows"))
+
+      # Stage 2: Query cities
+      update_loading_message("Loading city data...")
+      message(">>> Querying cities table...")
+      cities <- databricks_query(
+        sql = sprintf("SELECT * FROM %s.%s.%s", DATABRICKS_CATALOG, DATABRICKS_SCHEMA, CITIES_TABLE),
+        host = DATABRICKS_HOST,
+        token = DATABRICKS_TOKEN,
+        warehouse_id = DATABRICKS_WAREHOUSE_ID
+      )
+      cities_data(cities)
+      message(paste(">>> Cities loaded:", nrow(cities), "rows"))
+
+      # Stage 3: Prepare data
+      update_loading_message("Preparing dashboard...")
+      choices <- cities %>%
+        arrange(city_label) %>%
+        { setNames(.$GEOID, .$city_label) }
+      city_choices(choices)
+
+      # Mark data as loaded (this triggers conditionalPanel to hide overlay)
+      data_loaded(TRUE)
+      message(">>> Data loading complete! Overlay should now hide.")
+
+    }, error = function(e) {
+      message(paste(">>> ERROR loading data:", e$message))
+      update_loading_message("Error loading data. Please refresh the page.")
+      # Mark as loaded even on error so overlay hides and user sees error
+      data_loaded(TRUE)
+      showNotification(
+        paste("Error loading data:", e$message),
+        type = "error",
+        duration = NULL
+      )
+    })
+  })
+
+  # Convenience accessors that wait for data
+  tracts <- reactive({
+    req(data_loaded())
+    tracts_data()
+  })
+
+  cities <- reactive({
+    req(data_loaded())
+    cities_data()
+  })
+
+  # --------------------------------------------------------------------------
+  # Output for conditionalPanel to check (controls loading overlay visibility)
+  # --------------------------------------------------------------------------
+  output$data_ready <- reactive({
+    data_loaded()
+  })
+  # Critical: must evaluate even when not visible, otherwise conditionalPanel won't update
+  outputOptions(output, "data_ready", suspendWhenHidden = FALSE)
+
+  # --------------------------------------------------------------------------
+  # Render city pickers (after data loads)
+  # --------------------------------------------------------------------------
+
+  output$city_picker_tab1 <- renderUI({
+    req(city_choices())
+    pickerInput(
+      "city_tab1",
+      label = NULL,
+      choices = city_choices(),
+      selected = default_city,
+      options = pickerOptions(
+        liveSearch = TRUE,
+        liveSearchPlaceholder = "Search cities...",
+        title = "Select a City",
+        size = 10,
+        dropupAuto = FALSE,
+        container = "body"
+      ),
+      width = "100%"
+    )
+  })
+
+  output$city_picker_tab2 <- renderUI({
+    req(city_choices())
+    pickerInput(
+      "city_tab2",
+      label = NULL,
+      choices = city_choices(),
+      selected = default_city,
+      options = pickerOptions(
+        liveSearch = TRUE,
+        liveSearchPlaceholder = "Search cities...",
+        title = "Select a City",
+        size = 10,
+        dropupAuto = FALSE,
+        container = "body"
+      ),
+      width = "100%"
+    )
+  })
+
+  output$city_picker_tab3 <- renderUI({
+    req(city_choices())
+    pickerInput(
+      "city_tab3",
+      label = NULL,
+      choices = city_choices(),
+      selected = default_city,
+      options = pickerOptions(
+        liveSearch = TRUE,
+        liveSearchPlaceholder = "Search cities...",
+        title = "Select a City",
+        size = 10,
+        dropupAuto = FALSE,
+        container = "body"
+      ),
+      width = "100%"
+    )
+  })
+
+  # --------------------------------------------------------------------------
   # Sync city selection across all tabs using shared reactive
   # --------------------------------------------------------------------------
   selected_city <- reactiveVal(default_city)
@@ -377,7 +509,7 @@ server <- function(input, output, session) {
   # Filtered tracts for Tab 1
   city_tracts_tab1 <- reactive({
     req(input$city_tab1)
-    tracts %>%
+    tracts() %>%
       filter(primary_city_geoid == input$city_tab1) %>%
       arrange(desc(total_children))
   })
@@ -386,7 +518,7 @@ server <- function(input, output, session) {
   # Uses city-level Census data (official figures) rather than tract aggregation
   output$valuebox_tab1 <- renderUI({
     req(input$city_tab1)
-    city <- cities %>% filter(GEOID == input$city_tab1)
+    city <- cities() %>% filter(GEOID == input$city_tab1)
     req(nrow(city) > 0)
 
     value_box(
@@ -530,7 +662,7 @@ server <- function(input, output, session) {
   # Filtered tracts for Tab 2
   city_tracts_tab2 <- reactive({
     req(input$city_tab2)
-    tracts %>%
+    tracts() %>%
       filter(primary_city_geoid == input$city_tab2) %>%
       arrange(desc(children_poverty))
   })
@@ -552,7 +684,7 @@ server <- function(input, output, session) {
     req(nrow(city_tracts_tab2()) > 0)
     req(input$city_tab2)
 
-    city <- cities %>% filter(GEOID == input$city_tab2)
+    city <- cities() %>% filter(GEOID == input$city_tab2)
     city_name <- city$city_label
     all_tracts <- city_tracts_tab2()
     total_poverty <- sum(all_tracts$children_poverty, na.rm = TRUE)
@@ -719,7 +851,7 @@ server <- function(input, output, session) {
   # Filtered tracts for Tab 3
   city_tracts_tab3 <- reactive({
     req(input$city_tab3)
-    tracts %>%
+    tracts() %>%
       filter(primary_city_geoid == input$city_tab3) %>%
       filter(!is.na(poverty_rate)) %>%
       arrange(desc(poverty_rate))
@@ -741,7 +873,7 @@ server <- function(input, output, session) {
     req(nrow(city_tracts_tab3()) > 0)
     req(input$city_tab3)
 
-    city <- cities %>% filter(GEOID == input$city_tab3)
+    city <- cities() %>% filter(GEOID == input$city_tab3)
     city_name <- city$city_label
     all_tracts <- city_tracts_tab3()
     total_poverty <- sum(all_tracts$children_poverty, na.rm = TRUE)

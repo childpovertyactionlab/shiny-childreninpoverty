@@ -5,6 +5,6 @@ account: cpal
 server: shinyapps.io
 hostUrl: https://api.shinyapps.io/v1
 appId: 16467911
-bundleId: 11471550
+bundleId: 11474981
 url: https://cpal.shinyapps.io/child-poverty-flipbook/
 version: 1
